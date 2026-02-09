@@ -1,0 +1,94 @@
+/* Variables */
+:root {
+    --color-light-pink: #FFE3E3;
+    --color-pink: #FFD7D7;
+    --color-dark-pink: #FFC5C5;
+    --color-coral: #FF8484;
+    --color-blue: #A0B3D1;
+    --color-white: #FEF9F2  ;
+    --color-text-primary: #473232;
+    --color-text-secondary: #555555;
+
+    --font-family: 'Short Stack', sans-serif;
+}
+
+/* Global Styles*/
+body {
+    font-family: var(--font-family);
+    margin: 0;
+}
+h1 {
+    font-size: 22px;
+    color: var(--color-text-primary);
+}
+button {
+    all: unset;
+    display: flex;
+    justify-content: center;
+    font-size: 18px;
+    font-weight: bold;
+    align-items: center;
+    color: var(--color-white);
+    background: var(--color-coral);
+    border: 2px solid var(--color-white);
+    box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.25);
+    border-radius: 32px;
+    transition: transform 0.3s, box-shadow 0.2s;
+}
+button:hover {
+    transform: scale(1.015);
+    background-color: #ff7878;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+    cursor: pointer;
+}
+
+/* Components */
+.window {
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    border: 5px solid var(--color-blue);
+    border-radius: 8px;
+    box-sizing: border-box;
+    padding: 20px 30px;
+    gap: 25px;
+    background-image: url("assets/TinyLinkBackground.png");
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+}
+.window > *:nth-child(1) {
+  margin-top: 4px;
+}
+.window > *:nth-child(4) {
+  margin-top: 20px;
+}
+#title {
+    text-align: center;
+}
+.input-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 16px;
+    font-weight: bold;
+    color: var(--color-text-secondary);
+}
+.input-group input {
+    height: 35px;
+    border-radius: 12px;
+    border: 1px solid var(--color-dark-pink);
+    background-color: var(--color-white);
+    box-shadow: 0px 2px 5px rgba(0, 0, 0, 0.25);
+    color: var(--color-coral);
+    padding: 0px 10px;
+}
+.input-group input:focus {
+    outline-color: var(--color-coral);
+}
+#connect-button {
+    width: 120px;
+    height: 45px;
+    margin: 0 auto;
+}
