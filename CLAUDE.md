@@ -10,8 +10,10 @@ The linking feature is implemented: each running instance gets a short pairing c
 
 ## Commands
 
-- `npm start` — launch the app (`electron .`).
-- Networking requires TinyLinkServer running. By default the app connects to `http://localhost:8080`; start the server (`cd ../TinyLinkServer && npm install && npm start`) or point at a deployed one via the `TINYLINK_SERVER_URL` env var (e.g. `https://tinylinkserver.onrender.com`).
+- `npm start` — launch the app (`electron .`). Works out of the box: by default it connects to the **live** deployed TinyLinkServer at `https://tinylinkserver-d1vl.onrender.com` (no env vars needed).
+- To point elsewhere (e.g. a local server for testing), set the `TINYLINK_SERVER_URL` env var before launching, e.g. `TINYLINK_SERVER_URL=http://localhost:8080 npm start` (PowerShell: `$env:TINYLINK_SERVER_URL='http://localhost:8080'; npm start`). Run a local server with `cd ../TinyLinkServer && npm install && npm start`.
+- The default URL is defined by the `SERVER_URL` constant in `network.js`.
+- On startup the main-process console logs the connection (`[network] connecting to …`, `[network] connected …`, `[network] registered — your code is XXXXXX`); a `[network] connect_error …` line means it couldn't reach the server and is retrying.
 - Debugging: use the VS Code launch config in `launch.json` (the **Main + renderer** compound). It starts the main process with `--remote-debugging-port=9222` and attaches a Chrome debugger to the renderer. Note this file lives at the repo root; VS Code normally expects it at `.vscode/launch.json`.
 - No tests or linter are configured (`npm test` is a placeholder that exits 1).
 
@@ -24,7 +26,7 @@ Standard Electron three-layer split (main / preload / renderer), with **three** 
   - `characterWindow` → `character.html`: your avatar. Frameless, transparent, always-on-top, 140×140, top-right of the work area.
   - `peerWindow` → `peer.html`: the friend's avatar. Same style, created hidden and shown only while paired, positioned just left of your character.
 
-- **`network.js`** (main process) — the networking layer. Wraps a `socket.io-client` connection to TinyLinkServer (`TINYLINK_SERVER_URL`, default `http://localhost:8080`). Exposes `start({onCode,onStatus,onPeerInput})`, `pairWith(code)`, and `sendInput(event, button?)`. socket.io handles reconnection/backoff. `sendInput` is the **only** outbound input path and accepts only the abstract event names `key-down`/`key-up`/`mouse-down`/`mouse-up` plus an optional integer mouse button.
+- **`network.js`** (main process) — the networking layer. Wraps a `socket.io-client` connection to TinyLinkServer. The target is the `SERVER_URL` constant: `process.env.TINYLINK_SERVER_URL` if set, otherwise the live deployment `https://tinylinkserver-d1vl.onrender.com`. Because the default URL is `https://`, socket.io upgrades the WebSocket transport to `wss://` (secure) automatically — verified: initial `polling` transport upgrades to `websocket` over TLS. Exposes `start({onCode,onStatus,onPeerInput})`, `pairWith(code)`, and `sendInput(event, button?)`. socket.io handles reconnection/backoff. `sendInput` is the **only** outbound input path and accepts only the abstract event names `key-down`/`key-up`/`mouse-down`/`mouse-up` plus an optional integer mouse button.
 
 - **`preload.js`** — the security bridge, shared by all three windows. Via `contextBridge` it exposes:
   - `window.input` (`onKeyDown/onKeyUp/onMouseDown/onMouseUp`) — your local global input, consumed by `character.js`.

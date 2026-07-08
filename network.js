@@ -14,9 +14,12 @@
 
 const { io } = require('socket.io-client');
 
-// Default to a local server for development; override for a deployed instance
-// (e.g. set TINYLINK_SERVER_URL=https://tinylinkserver.onrender.com).
-const SERVER_URL = process.env.TINYLINK_SERVER_URL || 'http://localhost:8080';
+// Connect to the deployed TinyLinkServer by default so `npm start` works out of
+// the box. Override with the TINYLINK_SERVER_URL env var to point elsewhere
+// (e.g. TINYLINK_SERVER_URL=http://localhost:8080 for local testing).
+// socket.io-client derives its transport scheme from this URL: an https:// URL
+// means the WebSocket upgrade uses wss:// (secure) automatically.
+const SERVER_URL = process.env.TINYLINK_SERVER_URL || 'https://tinylinkserver-d1vl.onrender.com';
 
 // The only input signals we are allowed to emit. Anything else is dropped here
 // as a second line of defence behind the server's own allow-list.
@@ -54,11 +57,23 @@ function start({ onCode, onStatus, onPeerInput } = {}) {
     reconnectionDelayMax: 5000,
   });
 
-  socket.on('connect', () => setStatus('online'));
-  socket.on('disconnect', () => setStatus('offline'));
-  socket.on('connect_error', () => setStatus('offline'));
+  console.log(`[network] connecting to ${SERVER_URL} …`);
+
+  socket.on('connect', () => {
+    console.log(`[network] connected (${socket.id})`);
+    setStatus('online');
+  });
+  socket.on('disconnect', (reason) => {
+    console.log(`[network] disconnected: ${reason}`);
+    setStatus('offline');
+  });
+  socket.on('connect_error', (err) => {
+    console.log(`[network] connect_error: ${err.message} (will retry)`);
+    setStatus('offline');
+  });
 
   socket.on('registered', ({ code }) => {
+    console.log(`[network] registered — your code is ${code}`);
     myCode = code;
     handlers.onCode(code);
   });
