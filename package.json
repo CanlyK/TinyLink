@@ -15,6 +15,7 @@
     "electron": "^39.2.7"
   },
   "dependencies": {
+    "socket.io-client": "^4.8.3",
     "uiohook-napi": "^1.5.4"
   }
 }

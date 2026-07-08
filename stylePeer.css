@@ -1,0 +1,37 @@
+/* Peer avatar window. Same sprites as your own character, but marked as the
+   friend with a small "friend" badge and a soft blue glow so the two windows are
+   easy to tell apart. Palette matches the control panel (style.css). */
+:root {
+    --color-blue: #A0B3D1;
+    --color-white: #FEF9F2;
+    --font-family: 'Short Stack', sans-serif;
+}
+
+body {
+    margin: 0;
+    background-image: url("assets/characterUp.png");
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    width: 100vw;
+    height: 100vh;
+    /* soft blue glow distinguishes the friend from your own (un-glowed) avatar */
+    filter: drop-shadow(0 0 6px var(--color-blue));
+}
+
+/* Small "friend" badge pinned to the bottom of the window. */
+#peer-label {
+    position: fixed;
+    bottom: 2px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: var(--font-family);
+    font-size: 11px;
+    font-weight: bold;
+    color: var(--color-white);
+    background: var(--color-blue);
+    padding: 1px 8px;
+    border-radius: 10px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    white-space: nowrap;
+}
