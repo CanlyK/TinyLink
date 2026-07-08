@@ -17,6 +17,39 @@ The linking feature is implemented: each running instance gets a short pairing c
 - Debugging: use the VS Code launch config in `launch.json` (the **Main + renderer** compound). It starts the main process with `--remote-debugging-port=9222` and attaches a Chrome debugger to the renderer. Note this file lives at the repo root; VS Code normally expects it at `.vscode/launch.json`.
 - No tests or linter are configured (`npm test` is a placeholder that exits 1).
 
+## Building distributables
+
+Packaging is handled by **electron-builder** (dev dependency; config lives in the
+`"build"` field of `package.json`).
+
+- `npm run dist` — build installers for the **current OS** into `dist/`. On
+  Windows this produces an NSIS installer, `dist/TinyLink Setup <version>.exe`
+  (double-click to install; friends need no Node/git/terminal). On macOS it
+  produces `dist/TinyLink-<version>.dmg`.
+- `npm run pack` — faster `--dir`-only build (no installer) into
+  `dist/<platform>-unpacked/` for quick local testing.
+- **Cross-platform note:** a target can only be built on its own OS. The `.dmg`
+  must be built on a Mac (or CI); running `npm run dist` on Windows only emits
+  the `.exe`. The `mac`/`win` blocks in the config both exist so either machine
+  Just Works.
+- **Server URL is baked in automatically.** There is no build-time injection:
+  `network.js`'s `SERVER_URL` default (the live Render URL) is plain source that
+  gets packed into `app.asar`, so the installed app connects to the deployed
+  server with zero config. `TINYLINK_SERVER_URL` still overrides at runtime if a
+  user sets it, but a normal user never does.
+- **Native module:** `uiohook-napi` is rebuilt against Electron's ABI by
+  electron-builder and unpacked from the asar via the `asarUnpack` config (a
+  native `.node` binary can't be loaded from inside an asar archive).
+- **Icon:** `build/icon.png` (1024×1024 placeholder, generated from the character
+  sprite). electron-builder auto-generates the Windows `.ico` / macOS `.icns`
+  from it. Replace this file to rebrand.
+- **Code signing** is not configured. Unsigned builds trigger a
+  SmartScreen/Gatekeeper warning on first run (user clicks through: "More info →
+  Run anyway" on Windows; right-click → Open on macOS). Signing certificates cost
+  money and are optional for a hobby project — skip for now; revisit only if
+  distributing widely.
+- `dist/` is gitignored (build output is not committed).
+
 ## Architecture
 
 Standard Electron three-layer split (main / preload / renderer), with **three** BrowserWindows driven from a single `main.js`:

@@ -1,18 +1,49 @@
 {
   "name": "tinylink",
   "version": "1.0.0",
-  "description": "",
+  "description": "A tiny desktop companion whose floating character reacts to your and a paired friend's keyboard/mouse activity.",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
-  "author": "",
+  "author": "CanlyK",
   "license": "MIT",
   "type": "commonjs",
+  "build": {
+    "appId": "com.canlyk.tinylink",
+    "productName": "TinyLink",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "**/*",
+      "!dist/**",
+      "!*.log"
+    ],
+    "asarUnpack": [
+      "node_modules/uiohook-napi/**"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.social-networking"
+    }
+  },
   "devDependencies": {
-    "electron": "^39.2.7"
+    "electron": "^39.2.7",
+    "electron-builder": "^26.15.3"
   },
   "dependencies": {
     "socket.io-client": "^4.8.3",
