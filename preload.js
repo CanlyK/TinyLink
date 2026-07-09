@@ -16,6 +16,12 @@ contextBridge.exposeInMainWorld('link', {
   onStatus: (cb) => ipcRenderer.on('link:status', (_, status, detail) => cb(status, detail)),
 });
 
+// Avatar windows report whether the cursor is over their drag hitbox so the main
+// process can make only the visible sprite interactive (rest is click-through).
+contextBridge.exposeInMainWorld('widget', {
+  setHover: (over) => ipcRenderer.send('widget:hover', over),
+});
+
 // The PEER's abstract input signals, consumed by the peer renderer (peer.js).
 // These carry only an event type (+ optional integer mouse button) — never raw
 // key values or coordinates.

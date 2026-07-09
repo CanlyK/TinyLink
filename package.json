@@ -26,7 +26,8 @@
       "!*.log"
     ],
     "asarUnpack": [
-      "node_modules/uiohook-napi/**"
+      "node_modules/uiohook-napi/**",
+      "node_modules/get-windows/**"
     ],
     "win": {
       "target": "nsis"
@@ -46,6 +47,7 @@
     "electron-builder": "^26.15.3"
   },
   "dependencies": {
+    "get-windows": "^9.3.0",
     "socket.io-client": "^4.8.3",
     "uiohook-napi": "^1.5.4"
   }

@@ -27,6 +27,9 @@ const ALLOWED_EVENTS = new Set(['key-down', 'key-up', 'mouse-down', 'mouse-up'])
 
 let socket = null;
 let myCode = null;
+// Persisted { clientId, code } supplied by main.js; sent on every (re)connect so
+// the server can give us a stable code across restarts.
+let identity = null;
 
 // Callbacks supplied by main.js. Defaults are no-ops so calling before start()
 // is harmless.
@@ -42,7 +45,8 @@ function setStatus(status, detail) {
   handlers.onStatus(status, detail);
 }
 
-function start({ onCode, onStatus, onPeerInput } = {}) {
+function start({ identity: id, onCode, onStatus, onPeerInput } = {}) {
+  if (id) identity = id;
   if (onCode) handlers.onCode = onCode;
   if (onStatus) handlers.onStatus = onStatus;
   if (onPeerInput) handlers.onPeerInput = onPeerInput;
@@ -62,6 +66,12 @@ function start({ onCode, onStatus, onPeerInput } = {}) {
   socket.on('connect', () => {
     console.log(`[network] connected (${socket.id})`);
     setStatus('online');
+    // Register (or re-register) our persisted code on every connect/reconnect so
+    // the code stays stable across restarts and network blips.
+    socket.emit('register', {
+      clientId: identity && identity.clientId,
+      code: identity && identity.code,
+    });
   });
   socket.on('disconnect', (reason) => {
     console.log(`[network] disconnected: ${reason}`);

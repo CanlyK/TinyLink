@@ -49,3 +49,23 @@ function updateCharacterImage() {
     document.body.style.backgroundImage = 'url("assets/characterUp.png")';
   }
 }
+
+// Report cursor-over-hitbox so main makes only the visible sprite draggable; the
+// transparent padding stays click-through. (Same logic as character.js.)
+setupHitbox();
+function setupHitbox() {
+  const hitbox = document.getElementById('hitbox');
+  let over = false;
+  const report = (x, y) => {
+    const r = hitbox.getBoundingClientRect();
+    const now = x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+    if (now !== over) {
+      over = now;
+      window.widget.setHover(now);
+    }
+  };
+  window.addEventListener('mousemove', (e) => report(e.clientX, e.clientY));
+  window.addEventListener('mouseleave', () => {
+    if (over) { over = false; window.widget.setHover(false); }
+  });
+}

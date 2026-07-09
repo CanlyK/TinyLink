@@ -7,3 +7,18 @@ body {
     width: 100vw;
     height: 100vh;
 }
+
+/* Drag/interaction hitbox sized to the VISIBLE sprite (measured opaque bounds of
+   the character across all poses), not the whole transparent window. Only this
+   region is draggable; the transparent padding around it is click-through (the
+   main process toggles setIgnoreMouseEvents based on whether the cursor is here).
+   During a fullscreen game the main process forces click-through, overriding the
+   drag region so drags pass to the game. */
+#hitbox {
+    position: fixed;
+    left: 23%;
+    right: 15%;
+    top: 37%;
+    bottom: 20%;
+    -webkit-app-region: drag;
+}
