@@ -21,10 +21,22 @@
 // and keeps running regardless of focus.
 
 const { screen } = require('electron');
+const debug = require('./debuglog');
 
 const POLL_MS = 1000;
 const EDGE_TOL = 2;   // px slack for "origin at the monitor corner"
 const COVER_TOL = 2;  // px slack for "reaches the far/bottom edge"
+const ACTIVE_WINDOW_TIMEOUT_MS = 2000;
+
+// The desktop shell is NOT a fullscreen app, but it is a window sitting exactly
+// at the monitor origin covering the whole screen — so it passes the geometry
+// test and must be excluded by owner/title. Missing this caused the widget to get
+// permanently stuck click-through: once click-through, clicks fell through to the
+// desktop, which kept it the foreground window, which kept the detector firing.
+const SHELL_OWNERS = new Set([
+  'Windows Explorer', 'explorer.exe',           // Windows desktop (Progman/WorkerW) + taskbar
+  'Finder', 'Dock', 'Window Server', 'SystemUIServer', // macOS shell
+]);
 
 let timer = null;
 let lastState = false;
@@ -38,6 +50,25 @@ async function getActiveWindow() {
     activeWindowFn = mod.activeWindow;
   }
   return activeWindowFn();
+}
+
+// Never let a hung window query wedge the poll loop forever.
+async function withTimeout(query) {
+  let timeoutId;
+  const timeout = new Promise((_resolve, reject) => {
+    timeoutId = setTimeout(() => reject(new Error('activeWindow() timed out')), ACTIVE_WINDOW_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([query(), timeout]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+// The desktop / taskbar / Finder are never "a fullscreen app".
+function isShellWindow(owner, title) {
+  if (SHELL_OWNERS.has(owner)) return true;
+  return (title || '').trim() === 'Program Manager';
 }
 
 // Pure geometry test (no Electron) so it can be unit-tested. Returns true if a
@@ -54,33 +85,77 @@ function coversDisplay(b, db) {
   return atOrigin && reachesFarEdges;
 }
 
-function isForeignFullscreen(win) {
-  if (!win || !win.bounds) return false;
-  // Ignore our own windows so we never make ourselves click-through.
-  const owner = (win.owner && win.owner.name) || '';
-  if (owner === 'Electron' || owner === 'TinyLink') return false;
-  const display = screen.getDisplayMatching(win.bounds);
-  return coversDisplay(win.bounds, display.bounds);
+// On Windows, get-windows reports PHYSICAL pixels (GetWindowRect) while Electron's
+// display.bounds is in DIP. On a scaled display (e.g. 150%) comparing them
+// directly makes "covers the monitor" trivially true for ordinary windows, so
+// convert first. screenToDipRect is Windows-only; macOS already reports points.
+function toDipRect(rect) {
+  if (process.platform !== 'win32') return rect;
+  try {
+    return screen.screenToDipRect(null, rect);
+  } catch (_e) {
+    return rect;
+  }
 }
 
-// start(onChange): begins polling. onChange(isFullscreen) is called only on
+function isForeignFullscreen(win) {
+  if (!win || !win.bounds) return false;
+  const owner = (win.owner && win.owner.name) || '';
+  const title = win.title || '';
+
+  // Ignore our own windows so we never make ourselves click-through.
+  const isSelf = owner === 'Electron' || owner === 'TinyLink';
+  const isShell = isShellWindow(owner, title);
+  // Minimized windows report bogus coordinates (e.g. x=-32000).
+  const sane = win.bounds.width > 0 && win.bounds.height > 0;
+
+  let result = false;
+  let dip = null;
+  let displayBounds = null;
+  if (!isSelf && !isShell && sane) {
+    dip = toDipRect(win.bounds);
+    const display = screen.getDisplayMatching(dip);
+    displayBounds = display.bounds;
+    result = coversDisplay(dip, displayBounds);
+  }
+
+  if (debug.enabled) {
+    debug.log(
+      'tick', `owner="${owner}"`, `title="${title.slice(0, 40)}"`,
+      'raw=' + JSON.stringify(win.bounds),
+      'dip=' + JSON.stringify(dip),
+      'disp=' + JSON.stringify(displayBounds),
+      `self=${isSelf}`, `shell=${isShell}`,
+      '=> fs=' + result
+    );
+  }
+  return result;
+}
+
+// start(onChange, opts): begins polling. onChange(isFullscreen) is called only on
 // transitions (false->true, true->false), starting from an assumed non-fullscreen
-// state.
-function start(onChange) {
+// state. `opts.provider` is a test seam that replaces the active-window query.
+function start(onChange, opts = {}) {
   stop();
+  const provider = opts.provider || getActiveWindow;
   const tick = async () => {
     if (polling) return;
     polling = true;
     let fs = false;
     try {
-      fs = isForeignFullscreen(await getActiveWindow());
-    } catch (_e) {
-      // If window querying fails (e.g. macOS Screen Recording permission not
-      // granted), degrade gracefully: treat as not-fullscreen so the widgets
-      // simply stay interactive.
+      fs = isForeignFullscreen(await withTimeout(provider));
+    } catch (e) {
+      // If window querying fails or hangs (e.g. macOS Screen Recording permission
+      // not granted), degrade gracefully: treat as NOT fullscreen so the widgets
+      // stay interactive. Failing open matters — failing closed would leave the
+      // widget permanently click-through.
       fs = false;
+      debug.log('detector error (failing open):', e && e.message);
+    } finally {
+      // Must always clear, or a single rejection/hang would wedge the poll loop
+      // forever and freeze fullscreenActive at its last value.
+      polling = false;
     }
-    polling = false;
     if (fs !== lastState) {
       lastState = fs;
       try { onChange(fs); } catch (_e) { /* ignore consumer errors */ }
@@ -96,4 +171,4 @@ function stop() {
   lastState = false;
 }
 
-module.exports = { start, stop, coversDisplay };
+module.exports = { start, stop, coversDisplay, isShellWindow, isForeignFullscreen };

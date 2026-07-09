@@ -14,6 +14,7 @@ The linking feature is implemented: each running instance gets a short pairing c
 - To point elsewhere (e.g. a local server for testing), set the `TINYLINK_SERVER_URL` env var before launching, e.g. `TINYLINK_SERVER_URL=http://localhost:8080 npm start` (PowerShell: `$env:TINYLINK_SERVER_URL='http://localhost:8080'; npm start`). Run a local server with `cd ../TinyLinkServer && npm install && npm start`.
 - The default URL is defined by the `SERVER_URL` constant in `network.js`.
 - On startup the main-process console logs the connection (`[network] connecting to …`, `[network] connected …`, `[network] registered — your code is XXXXXX`); a `[network] connect_error …` line means it couldn't reach the server and is retrying.
+- Debugging window/click-through behavior: set `TINYLINK_DEBUG_LOG` to a file path before launching (PowerShell: `$env:TINYLINK_DEBUG_LOG='C:\temp\tl.log'; npm start`). It traces every fullscreen-detection tick (active window owner/title, raw vs DIP bounds, why it did/didn't match) and every `setIgnoreMouseEvents` call. Note: running the `electron` binary in a shell where `ELECTRON_RUN_AS_NODE=1` is set makes it behave as plain Node (`require('electron')` returns a path string, `app` is `undefined`) — unset it first.
 - Debugging: use the VS Code launch config in `launch.json` (the **Main + renderer** compound). It starts the main process with `--remote-debugging-port=9222` and attaches a Chrome debugger to the renderer. Note this file lives at the repo root; VS Code normally expects it at `.vscode/launch.json`.
 - No tests or linter are configured (`npm test` is a placeholder that exits 1).
 
@@ -61,7 +62,9 @@ Standard Electron three-layer split (main / preload / renderer), with **three** 
 
 - **`identity.js`** (main process) — persists this install's `{ clientId, code }` as JSON in `app.getPath('userData')/identity.json` so the pairing code is **stable across restarts** (see "Networking layer"). `load()` creates it on first run; `setCode()` persists a server-corrected code.
 
-- **`fullscreen.js`** (main process) — detects whether a *foreign* fullscreen app (e.g. a game) is active and reports transitions via `start(onChange)` / `stop()`. See "Window interaction" below. Exports the pure `coversDisplay(winBounds, displayBounds)` geometry test for unit testing.
+- **`fullscreen.js`** (main process) — detects whether a *foreign* fullscreen app (e.g. a game) is active and reports transitions via `start(onChange, {provider})` / `stop()`. See "Window interaction" below. Exports the pure `coversDisplay()` / `isShellWindow()` helpers and `isForeignFullscreen()` for testing; `opts.provider` is a test seam replacing the active-window query.
+
+- **`debuglog.js`** (main process) — opt-in file logger. Set `TINYLINK_DEBUG_LOG=<path>` to trace fullscreen detection ticks and every `setIgnoreMouseEvents` call; a no-op otherwise. (Electron's main-process `console.log` doesn't reliably reach stdout on Windows, hence a file.)
 
 - **`network.js`** (main process) — the networking layer. Wraps a `socket.io-client` connection to TinyLinkServer. The target is the `SERVER_URL` constant: `process.env.TINYLINK_SERVER_URL` if set, otherwise the live deployment `https://tinylinkserver-d1vl.onrender.com`. Because the default URL is `https://`, socket.io upgrades the WebSocket transport to `wss://` (secure) automatically — verified: initial `polling` transport upgrades to `websocket` over TLS. Exposes `start({onCode,onStatus,onPeerInput})`, `pairWith(code)`, and `sendInput(event, button?)`. socket.io handles reconnection/backoff. `sendInput` is the **only** outbound input path and accepts only the abstract event names `key-down`/`key-up`/`mouse-down`/`mouse-up` plus an optional integer mouse button.
 
@@ -69,12 +72,11 @@ Standard Electron three-layer split (main / preload / renderer), with **three** 
   - `window.input` (`onKeyDown/onKeyUp/onMouseDown/onMouseUp`) — your local global input, consumed by `character.js`.
   - `window.link` (`pair`, `requestState`, `onCode`, `onStatus`) — the control panel's channel to the networking layer.
   - `window.peer` (`onKeyDown/onKeyUp/onMouseDown/onMouseUp`, `onReset`) — the friend's abstract input, consumed by `peer.js`.
-  - `window.widget` (`setHover`) — avatar renderers report whether the cursor is over the drag hitbox (see "Window interaction").
   Renderer code never touches `ipcRenderer` directly.
 
 - **Renderers**:
-  - `character.js` (`character.html`) — tracks `keyDown`/`mouseDown` from `window.input` and swaps `document.body`'s background among the four `assets/character*.png` sprites. Also reports cursor-over-`#hitbox` via `window.widget.setHover`.
-  - `peer.js` (`peer.html`, `stylePeer.css`) — the same animation logic driven by `window.peer`; styled with a blue glow + "friend" badge to distinguish it from your own avatar. Resets to idle on `onReset` (peer disconnect). Also reports hover like `character.js`.
+  - `character.js` (`character.html`) — tracks `keyDown`/`mouseDown` from `window.input` and swaps `document.body`'s background among the four `assets/character*.png` sprites.
+  - `peer.js` (`peer.html`, `stylePeer.css`) — the same animation logic driven by `window.peer`; styled with a blue glow + "friend" badge to distinguish it from your own avatar. Resets to idle on `onReset` (peer disconnect).
   - `connect.js` (`index.html` + `style.css`) — the control panel. Displays your code (readonly), sends the friend's code via `window.link.pair`, and shows connection/pairing status in `#status`.
 
 ## Networking layer & pairing
@@ -92,22 +94,42 @@ The **avatar windows** are subtler: the window is transparent 140×140 but the
 visible sprite only occupies a smaller area (measured opaque bounds ≈ x 26–82%,
 y 40–78% of the image). So the drag region is a `#hitbox` element sized to that
 sprite area (`styleCharacter.css` / `stylePeer.css`) — **not** the whole window.
-Everything outside the hitbox is click-through: each avatar renderer tracks
-whether the cursor is over `#hitbox` (`window.widget.setHover`), and `main.js`
-sets `win.setIgnoreMouseEvents(!overHitbox, { forward: true })` so only the
-visible sprite is grabbable and the transparent padding passes clicks through.
-`forward: true` keeps `mousemove` flowing even while click-through, which is how
-the renderer notices the cursor entering the hitbox. If you re-crop the sprites,
-re-measure and update the hitbox insets.
+Everything outside the hitbox is click-through.
 
-**Fullscreen click-through.** When another app is running fullscreen (a game),
-the avatar windows stay *visible* but become fully click-through so clicks/drags
-pass to the game. `fullscreen.js` polls the foreground window (~1s) via
-`get-windows` and calls back on transitions. `main.js` combines this with the
-hitbox state — a window ignores the mouse when `fullscreenActive || !overHitbox`
-(`updateMouseIgnore`) — so fullscreen forces click-through regardless of cursor
-position. Leaving fullscreen restores normal hitbox behavior. The peer window
-inherits the current state when it appears mid-game.
+`main.js` decides interactivity by **polling the real cursor position** every 40ms
+(`cursorOverHitbox` → `screen.getCursorScreenPoint()` vs `win.getBounds()`) and
+calling `win.setIgnoreMouseEvents(ignore, { forward: true })` only when the value
+changes. It does **not** rely on renderer `mousemove` events: a
+`-webkit-app-region: drag` region swallows mouse events and `mouseleave` on
+`window` is unreliable, so a renderer-driven hover state could desync and leave
+the widget permanently stuck click-through. Cursor polling is authoritative and
+re-derived every tick, so it cannot stick. The `HITBOX` insets in `main.js` are
+duplicated from the `#hitbox` CSS — **keep them in sync** if you re-crop sprites.
+
+**Fullscreen click-through.** When another app is running fullscreen (a game), the
+avatar windows stay *visible* but become fully click-through so clicks/drags pass
+to the game. `fullscreen.js` polls the foreground window (~1s) via `get-windows`;
+`main.js` ignores the mouse when `fullscreenActive || !overHitbox`
+(`updateMouseIgnore`). Leaving fullscreen restores normal hitbox behavior.
+
+Detection gotchas (each of these caused a real bug — don't regress them):
+- **Exclude the shell.** The desktop (`Windows Explorer` / "Program Manager") is a
+  window sitting at the monitor origin covering the whole screen, so it *passes*
+  the geometry test. `isShellWindow()` excludes it. Without this the widget got
+  permanently stuck: once click-through, clicks fell through to the desktop, which
+  kept the desktop foreground, which kept the detector firing — a self-reinforcing
+  trap.
+- **Convert units.** On Windows `get-windows` reports **physical** pixels while
+  `display.bounds` is **DIP**. On a scaled display (e.g. 150%) comparing them
+  directly makes "covers the monitor" true for ordinary windows. `toDipRect()`
+  (`screen.screenToDipRect`, Windows-only; macOS already reports points) converts
+  first.
+- **Origin check** separates fullscreen (origin ≈ 0,0) from *maximized* (Windows
+  inflates it to a negative origin like −8,−8).
+- **Fail open, never closed.** Any error/timeout in the window query yields
+  `false` (interactive), never `true`. `polling` is cleared in a `finally` and the
+  query is wrapped in a 2s timeout, so a hang can't wedge the loop and freeze
+  `fullscreenActive` at `true`.
 
 **Always-on-top hardening.** The avatars are created `alwaysOnTop`, but the
 default `'floating'` level is weak (especially on macOS). `main.js`

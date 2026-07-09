@@ -1,6 +1,6 @@
 {
   "name": "tinylink",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "A tiny desktop companion whose floating character reacts to your and a paired friend's keyboard/mouse activity.",
   "main": "main.js",
   "scripts": {
@@ -16,6 +16,7 @@
   "build": {
     "appId": "com.canlyk.tinylink",
     "productName": "TinyLink",
+    "npmRebuild": false,
     "directories": {
       "output": "dist",
       "buildResources": "build"

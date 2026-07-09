@@ -5,6 +5,7 @@ const path = require('path');
 const network = require('./network');
 const fullscreen = require('./fullscreen');
 const identity = require('./identity');
+const debug = require('./debuglog');
 
 let mainWindow;
 let characterWindow;
@@ -19,14 +20,50 @@ let fullscreenActive = false;
 // The two avatar windows share drag/click-through/always-on-top behavior.
 const avatarWindows = () => [characterWindow, peerWindow].filter((w) => w && !w.isDestroyed());
 
-// A character window should ignore the mouse (be click-through) when a fullscreen
-// app is active OR the cursor is NOT over the avatar's drag hitbox. Only over the
-// visible sprite is it interactive/draggable; the transparent padding passes
-// clicks through. `win._overHitbox` is updated from the renderer ('widget:hover').
+// Fractional insets of the drag hitbox within the avatar window. MUST match the
+// `#hitbox` rule in styleCharacter.css / stylePeer.css (sized to the visible
+// sprite's opaque bounds).
+const HITBOX = { left: 0.23, right: 0.15, top: 0.37, bottom: 0.20 };
+const HOVER_POLL_MS = 40;
+let hoverTimer = null;
+
+// Is the OS cursor currently over the window's drag hitbox? Computed in the main
+// process from the authoritative cursor position rather than from renderer
+// mousemove events: a `-webkit-app-region: drag` region swallows mouse events, so
+// a renderer-driven hover state can desync and leave the widget stuck
+// click-through. Polling the cursor cannot desync — it is re-derived every tick.
+const cursorOverHitbox = (win) => {
+    if (!win || win.isDestroyed() || !win.isVisible()) return false;
+    const b = win.getBounds();               // DIP
+    const p = screen.getCursorScreenPoint(); // DIP
+    const x1 = b.x + b.width * HITBOX.left;
+    const x2 = b.x + b.width * (1 - HITBOX.right);
+    const y1 = b.y + b.height * HITBOX.top;
+    const y2 = b.y + b.height * (1 - HITBOX.bottom);
+    return p.x >= x1 && p.x <= x2 && p.y >= y1 && p.y <= y2;
+};
+
+// A character window ignores the mouse (is click-through) when a fullscreen app is
+// active OR the cursor is not over the avatar's drag hitbox. Only over the visible
+// sprite is it interactive/draggable; the transparent padding passes clicks
+// through. Only calls into Electron when the value actually changes.
 const updateMouseIgnore = (win) => {
     if (!win || win.isDestroyed()) return;
     const ignore = fullscreenActive || !win._overHitbox;
+    if (win._ignoring === ignore) return;
+    win._ignoring = ignore;
+    debug.log('setIgnoreMouseEvents', `win=${win === characterWindow ? 'character' : 'peer'}`,
+        `ignore=${ignore}`, `(fullscreenActive=${fullscreenActive} overHitbox=${!!win._overHitbox})`);
     win.setIgnoreMouseEvents(ignore, { forward: true });
+};
+
+// Re-derive hover for both avatars from the cursor position and apply. Runs on a
+// short interval so the widget can never remain stuck in the wrong mouse state.
+const pollHover = () => {
+    avatarWindows().forEach((win) => {
+        win._overHitbox = cursorOverHitbox(win);
+        updateMouseIgnore(win);
+    });
 };
 
 // Always-on-top hardening. 'screen-saver' is a higher level than the default
@@ -88,10 +125,10 @@ const createCharacterWindow = () => {
     });
 
     characterWindow.loadFile('character.html')
-    characterWindow._overHitbox = false;
-    // Start click-through; the renderer flips it interactive when the cursor is
+    // Start click-through; the hover poll flips it interactive when the cursor is
     // over the avatar hitbox.
-    characterWindow.setIgnoreMouseEvents(true, { forward: true });
+    characterWindow._overHitbox = false;
+    updateMouseIgnore(characterWindow);
     enforceAlwaysOnTop(characterWindow);
     characterWindow.on('blur', () => reassertAlwaysOnTop(characterWindow));
 }
@@ -119,7 +156,7 @@ const createPeerWindow = () => {
 
     peerWindow.loadFile('peer.html')
     peerWindow._overHitbox = false;
-    peerWindow.setIgnoreMouseEvents(true, { forward: true });
+    updateMouseIgnore(peerWindow);
     enforceAlwaysOnTop(peerWindow);
     peerWindow.on('blur', () => reassertAlwaysOnTop(peerWindow));
 }
@@ -212,21 +249,16 @@ app.whenReady().then(() => {
         event.sender.send('link:status', lastStatus.status, lastStatus.detail);
     });
 
-    // An avatar renderer reports whether the cursor is over its drag hitbox, so we
-    // can make just the visible sprite interactive and pass clicks through the
-    // transparent padding around it.
-    ipcMain.on('widget:hover', (event, over) => {
-        const win = BrowserWindow.fromWebContents(event.sender);
-        if (!win) return;
-        win._overHitbox = !!over;
-        updateMouseIgnore(win);
-    });
+    // Only the visible sprite is grabbable: poll the cursor and toggle
+    // click-through so the transparent padding passes clicks through.
+    hoverTimer = setInterval(pollHover, HOVER_POLL_MS);
 
     // --- Fullscreen click-through: when a foreign fullscreen app (e.g. a game)
     //     is active, make the character widgets click-through so clicks/drags
     //     pass to the game; restore interactivity when it exits. This only
     //     toggles mouse handling on the widgets — uiohook capture is untouched. ---
     fullscreen.start((isFullscreen) => {
+        debug.log('fullscreen transition ->', isFullscreen);
         fullscreenActive = isFullscreen;
         avatarWindows().forEach(updateMouseIgnore);
     });
@@ -238,6 +270,7 @@ app.on('window-all-closed', () => {
         uIOhook.stop();
         fullscreen.stop();
         if (alwaysOnTopTimer) clearInterval(alwaysOnTopTimer);
+        if (hoverTimer) clearInterval(hoverTimer);
         app.quit();
     }
 })

@@ -35,26 +35,3 @@ function updateCharacterImage() {
     document.body.style.backgroundImage = 'url("assets/characterUp.png")';
   }
 }
-
-// Report to the main process whether the cursor is over the drag hitbox (the
-// visible sprite). Main makes the window interactive/draggable only then; the
-// transparent padding stays click-through. mousemove events keep flowing while
-// click-through because the window is set with { forward: true }.
-setupHitbox();
-function setupHitbox() {
-  const hitbox = document.getElementById('hitbox');
-  let over = false;
-  const report = (x, y) => {
-    const r = hitbox.getBoundingClientRect();
-    const now = x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
-    if (now !== over) {
-      over = now;
-      window.widget.setHover(now);
-    }
-  };
-  window.addEventListener('mousemove', (e) => report(e.clientX, e.clientY));
-  // Safety net: if the cursor leaves the window entirely, revert to click-through.
-  window.addEventListener('mouseleave', () => {
-    if (over) { over = false; window.widget.setHover(false); }
-  });
-}
