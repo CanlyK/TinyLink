@@ -100,6 +100,8 @@ button:hover {
     width: 120px;
     height: 45px;
     margin: 0 auto;
+    padding: 3.5px;
+    box-sizing: border-box;
 }
 #status {
     margin: 0;
@@ -107,4 +109,13 @@ button:hover {
     text-align: center;
     font-size: 13px;
     color: var(--color-text-secondary);
+}
+#hint {
+    /* pull up against the flex gap so it reads as a footnote under the status */
+    margin: -14px 0 0 0;
+    text-align: center;
+    font-size: 11px;
+    font-weight: normal;
+    color: var(--color-blue);
+    padding: 10px;
 }

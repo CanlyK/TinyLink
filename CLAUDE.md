@@ -56,11 +56,13 @@ Packaging is handled by **electron-builder** (dev dependency; config lives in th
 Standard Electron three-layer split (main / preload / renderer), with **three** BrowserWindows driven from a single `main.js`:
 
 - **`main.js`** (main process) — creates all windows and owns all OS-level input capture. It uses `uiohook-napi` (`uIOhook`) to listen for *global* key/mouse events (system-wide, even when the app is unfocused). For each event it (1) forwards the raw event to the character window over IPC channels `global-keydown`/`global-keyup`/`global-mousedown`/`global-mouseup` (local-only, fine to be raw), and (2) relays an **abstract** signal to the paired peer via `network.sendInput(...)` (see privacy note). `uIOhook.start()` runs on app ready and `uIOhook.stop()` on window-all-closed. It also owns the networking callbacks, the `link:*` / `widget:hover` IPC, per-window mouse click-through state, and always-on-top enforcement (see "Window interaction").
-  - `mainWindow` → `index.html`: the frameless 380×355 control panel.
+  - `mainWindow` → `index.html`: the frameless 380×395 control panel.
   - `characterWindow` → `character.html`: your avatar. Frameless, transparent, always-on-top, 140×140, top-right of the work area.
   - `peerWindow` → `peer.html`: the friend's avatar. Same style, created hidden and shown only while paired, positioned just left of your character.
 
 - **`identity.js`** (main process) — persists this install's `{ clientId, code }` as JSON in `app.getPath('userData')/identity.json` so the pairing code is **stable across restarts** (see "Networking layer"). `load()` creates it on first run; `setCode()` persists a server-corrected code.
+
+- **`settings.js`** (main process) — persists user preferences (`{ characterSize, peerSize }`) as JSON in `userData/settings.json`, same pattern as `identity.js`. Sizes are clamped to `[MIN_SIZE, MAX_SIZE]` (60–400) on load; `save()` is debounced (400ms) because scroll-resizing writes in bursts.
 
 - **`fullscreen.js`** (main process) — detects whether a *foreign* fullscreen app (e.g. a game) is active and reports transitions via `start(onChange, {provider})` / `stop()`. See "Window interaction" below. Exports the pure `coversDisplay()` / `isShellWindow()` helpers and `isForeignFullscreen()` for testing; `opts.provider` is a test seam replacing the active-window query.
 
@@ -90,21 +92,57 @@ Pairing/relay is handled by **TinyLinkServer** (`../TinyLinkServer`, a socket.io
 **Dragging.** The control panel is draggable via `-webkit-app-region: drag` on
 `.window`, with the code inputs and Connect button marked `no-drag`.
 
-The **avatar windows** are subtler: the window is transparent 140×140 but the
-visible sprite only occupies a smaller area (measured opaque bounds ≈ x 26–82%,
-y 40–78% of the image). So the drag region is a `#hitbox` element sized to that
-sprite area (`styleCharacter.css` / `stylePeer.css`) — **not** the whole window.
-Everything outside the hitbox is click-through.
+The **avatar windows** are subtler: the window is transparent (140×140 by
+default) but the visible sprite only occupies a smaller area (measured opaque
+bounds ≈ x 26–82%, y 40–78% of the image). The interactive region is the
+`HITBOX` fractional insets in `main.js` — the **single source of truth** (no CSS
+drag region; fractions scale with the resizable window). Everything outside it is
+click-through. Re-measure `HITBOX` if you re-crop the sprites.
 
 `main.js` decides interactivity by **polling the real cursor position** every 40ms
 (`cursorOverHitbox` → `screen.getCursorScreenPoint()` vs `win.getBounds()`) and
 calling `win.setIgnoreMouseEvents(ignore, { forward: true })` only when the value
-changes. It does **not** rely on renderer `mousemove` events: a
-`-webkit-app-region: drag` region swallows mouse events and `mouseleave` on
-`window` is unreliable, so a renderer-driven hover state could desync and leave
-the widget permanently stuck click-through. Cursor polling is authoritative and
-re-derived every tick, so it cannot stick. The `HITBOX` insets in `main.js` are
-duplicated from the `#hitbox` CSS — **keep them in sync** if you re-crop sprites.
+changes. It does **not** rely on renderer `mousemove` events, which can be
+swallowed/unreliable and once left the widget permanently stuck click-through.
+Cursor polling is authoritative and re-derived every tick, so it cannot stick.
+
+**Drag & scroll-to-resize (manual, main-side).** Left-click-and-hold on the
+sprite starts a drag: uiohook's global `mousedown`/`mouseup` bracket the hold, and
+a 16ms tick (`dragTick`) keeps the grab point under the cursor. While held,
+**scrolling the wheel resizes the widget**: each notch (uiohook `wheel`;
+scroll-up is `rotation` −1) moves a **target** size by `RESIZE_STEP` (8px),
+clamped to **60–400px** on *every* notch, and the tick **eases** the actual size
+toward the target (`RESIZE_EASE` 0.35/frame, settling exactly) so resizing feels
+gradual rather than jumpy. Anchoring uses the grab point stored as a *fraction*
+of the window, so the sprite grows/shrinks around the cursor without jumping.
+Sizes persist per-widget via `settings.js` and are restored on launch (windows
+are created at their persisted size, right-edge anchored). Both avatars resize
+independently. Deliberately **not** `-webkit-app-region: drag`: the native drag
+enters an OS modal move loop that swallows wheel events for the whole hold
+(making resize-while-dragging impossible) and fights programmatic `setBounds`.
+Wheel events are **not** relayed to the peer — the network protocol stays
+key/mouse up/down only. A fullscreen transition force-ends any active drag. The
+feature is surfaced to users via the `#hint` line in the control panel and
+`title` tooltips on the avatar `<body>`s.
+
+Hard-won rules for this code (each prevented or fixed a real crash/bug):
+- **Never pass computed numbers straight to native window APIs.**
+  `setAvatarBounds()` is the *only* path to `setBounds` for the avatars: it
+  rejects non-finite values and clamps size on every call. Unvalidated math
+  crashed the app (`TypeError: … conversion failure` from a timer) when a
+  display-mode change mid-drag (a game launching) produced degenerate bounds,
+  making the grab-fraction arithmetic non-finite — `Math.round` passes
+  NaN/±Infinity through untouched. `beginDrag` likewise refuses to start on
+  degenerate bounds.
+- **Step resize from the logical size, never `getBounds()`.** DIP↔physical
+  rounding on scaled displays (150%) drifts read-back a few px per call, which
+  turned fixed steps into growing ones.
+- **Invalidate the click-through cache after every `setBounds`.**
+  `updateMouseIgnore` skips the native call when its cached `_ignoring` matches,
+  but a resize can reset the window's native ex-styles — without invalidation the
+  grown transparent padding silently intercepted clicks meant for windows behind.
+  The hitbox itself is fractional (`HITBOX`), so its geometry scales with any
+  size automatically.
 
 **Fullscreen click-through.** When another app is running fullscreen (a game), the
 avatar windows stay *visible* but become fully click-through so clicks/drags pass

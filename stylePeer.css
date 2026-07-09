@@ -19,16 +19,8 @@ body {
     filter: drop-shadow(0 0 6px var(--color-blue));
 }
 
-/* Drag/interaction hitbox over just the visible sprite (see styleCharacter.css).
-   Everything else in the window is click-through. */
-#hitbox {
-    position: fixed;
-    left: 23%;
-    right: 15%;
-    top: 37%;
-    bottom: 20%;
-    -webkit-app-region: drag;
-}
+/* No -webkit-app-region: drag/resize is handled in main.js (see
+   styleCharacter.css for the rationale). */
 
 /* Small "friend" badge pinned to the bottom of the window. */
 #peer-label {

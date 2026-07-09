@@ -5,12 +5,14 @@ const path = require('path');
 const network = require('./network');
 const fullscreen = require('./fullscreen');
 const identity = require('./identity');
+const settings = require('./settings');
 const debug = require('./debuglog');
 
 let mainWindow;
 let characterWindow;
 let peerWindow;
 let myIdentity;             // { clientId, code } persisted across restarts
+let prefs;                  // { characterSize, peerSize } persisted across restarts
 let alwaysOnTopTimer = null;
 
 // Whether a foreign fullscreen app (e.g. a game) is currently active. While true,
@@ -20,18 +22,17 @@ let fullscreenActive = false;
 // The two avatar windows share drag/click-through/always-on-top behavior.
 const avatarWindows = () => [characterWindow, peerWindow].filter((w) => w && !w.isDestroyed());
 
-// Fractional insets of the drag hitbox within the avatar window. MUST match the
-// `#hitbox` rule in styleCharacter.css / stylePeer.css (sized to the visible
-// sprite's opaque bounds).
+// Fractional insets of the drag hitbox within the avatar window, sized to the
+// visible sprite's opaque bounds (measured across all poses). This is the single
+// source of truth — fractions, so it scales with the resizable window.
 const HITBOX = { left: 0.23, right: 0.15, top: 0.37, bottom: 0.20 };
 const HOVER_POLL_MS = 40;
 let hoverTimer = null;
 
 // Is the OS cursor currently over the window's drag hitbox? Computed in the main
 // process from the authoritative cursor position rather than from renderer
-// mousemove events: a `-webkit-app-region: drag` region swallows mouse events, so
-// a renderer-driven hover state can desync and leave the widget stuck
-// click-through. Polling the cursor cannot desync — it is re-derived every tick.
+// mousemove events, which can be swallowed/unreliable and once left the widget
+// stuck click-through. Polling the cursor cannot desync — re-derived every tick.
 const cursorOverHitbox = (win) => {
     if (!win || win.isDestroyed() || !win.isVisible()) return false;
     const b = win.getBounds();               // DIP
@@ -66,6 +67,111 @@ const pollHover = () => {
     });
 };
 
+// --- Manual drag + scroll-to-resize -----------------------------------------
+// Dragging is implemented in the MAIN process (uiohook mousedown/mouseup + a
+// cursor poll), not with `-webkit-app-region: drag`. The native CSS drag enters
+// an OS modal move loop that (a) swallows wheel events for the duration of the
+// hold, making scroll-resize-while-dragging impossible, and (b) would fight any
+// programmatic setBounds. Manual dragging sidesteps both.
+//
+// While the left button is held on an avatar's hitbox:
+//   - a 16ms tick moves the window so the grab point stays under the cursor,
+//   - each wheel notch adjusts a TARGET size by RESIZE_STEP (clamped 60–400);
+//     the tick eases the actual size toward the target so resizing feels
+//     gradual instead of jumpy. Anchoring uses the grab point stored as a
+//     FRACTION of the window, so it stays valid across resizes and the sprite
+//     grows/shrinks around the cursor.
+// The tick issues ONE validated setBounds per frame (position + size together).
+const RESIZE_STEP = 8;        // px per wheel notch (applied to the target)
+const RESIZE_EASE = 0.35;     // fraction of remaining distance applied per tick
+const DRAG_POLL_MS = 16;
+const LEFT_BUTTON = 1;        // uiohook button index (verified by probe)
+let drag = null;              // { win, key, fx, fy, size, target, timer }
+
+// The ONLY path to the native setBounds for avatar windows. Rejects any
+// non-finite/degenerate value instead of passing it to Electron's native bridge,
+// which throws an uncatchable-in-context "conversion failure" TypeError on
+// NaN/Infinity (this crashed the app when a display-mode change mid-drag made
+// getBounds return degenerate bounds and the grab-fraction math went non-finite).
+// Also invalidates the click-through cache: setBounds can reset the window's
+// native ex-styles, so the cached _ignoring value may no longer match reality —
+// clearing it makes the next hover poll re-apply setIgnoreMouseEvents.
+const setAvatarBounds = (win, x, y, size) => {
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(size)) {
+        debug.log('setAvatarBounds REJECTED non-finite', x, y, size);
+        return false;
+    }
+    const s = settings.clampSize(size); // finite integer in [MIN_SIZE, MAX_SIZE]
+    win.setBounds({ x: Math.round(x), y: Math.round(y), width: s, height: s });
+    win._ignoring = undefined; // force re-apply of click-through on next poll
+    return true;
+};
+
+const beginDrag = () => {
+    if (drag || fullscreenActive) return;
+    const win = avatarWindows().find(cursorOverHitbox);
+    if (!win) return;
+    const b = win.getBounds();
+    // Degenerate bounds (e.g. mid display-mode change) would poison the grab
+    // fractions with Infinity/NaN — refuse to start the drag instead.
+    if (!(b.width > 0) || !(b.height > 0)) {
+        debug.log('beginDrag REJECTED degenerate bounds', JSON.stringify(b));
+        return;
+    }
+    const p = screen.getCursorScreenPoint();
+    const size = settings.clampSize(prefs[win === characterWindow ? 'characterSize' : 'peerSize']);
+    drag = {
+        win,
+        key: win === characterWindow ? 'characterSize' : 'peerSize',
+        fx: (p.x - b.x) / b.width,
+        fy: (p.y - b.y) / b.height,
+        size,          // current logical size (float while easing)
+        target: size,  // wheel notches move this; the tick eases toward it
+        timer: setInterval(dragTick, DRAG_POLL_MS),
+    };
+    debug.log('drag start', drag.key, JSON.stringify(b));
+};
+
+// One frame of drag: ease the size toward the target and pin the grab point
+// under the cursor, in a single validated setBounds.
+const dragTick = () => {
+    if (!drag || drag.win.isDestroyed()) return endDrag();
+    const p = screen.getCursorScreenPoint();
+    let s = drag.size;
+    if (s !== drag.target) {
+        s += (drag.target - s) * RESIZE_EASE;
+        if (Math.abs(drag.target - s) < 0.5) s = drag.target; // settle exactly
+        drag.size = s;
+    }
+    setAvatarBounds(drag.win, p.x - drag.fx * s, p.y - drag.fy * s, s);
+};
+
+const endDrag = () => {
+    if (!drag) return;
+    clearInterval(drag.timer);
+    const d = drag;
+    drag = null;
+    if (d.win.isDestroyed()) return;
+    // Land exactly on the target (the ease may not have settled yet).
+    if (d.size !== d.target) {
+        const p = screen.getCursorScreenPoint();
+        setAvatarBounds(d.win, p.x - d.fx * d.target, p.y - d.fy * d.target, d.target);
+    }
+    debug.log('drag end', JSON.stringify(d.win.getBounds()));
+};
+
+// Wheel while held: move the resize target. uiohook reports scroll-up as
+// rotation −1 (verified by probe), so growth = −rotation. Non-finite rotation
+// (odd input devices) is ignored rather than propagated into the math.
+const resizeHeldAvatar = (rotation) => {
+    if (!drag || drag.win.isDestroyed()) return;
+    if (!Number.isFinite(rotation) || rotation === 0) return;
+    drag.target = settings.clampSize(drag.target + -Math.sign(rotation) * RESIZE_STEP);
+    prefs[drag.key] = drag.target;
+    settings.save(prefs);
+    debug.log('resize target', drag.key, '->', drag.target);
+};
+
 // Always-on-top hardening. 'screen-saver' is a higher level than the default
 // 'floating', which matters most on macOS (where 'floating' is easily covered).
 const AOT_LEVEL = 'screen-saver';
@@ -94,7 +200,7 @@ let lastStatus = { status: 'connecting', detail: undefined };
 const createWindow = () => {
     mainWindow = new BrowserWindow({
         width: 380,
-        height: 355,
+        height: 395,
         frame: false,
         resizable: false,
         focusable: true,
@@ -108,16 +214,17 @@ const createWindow = () => {
 
 const createCharacterWindow = () => {
     const size = screen.getPrimaryDisplay().workAreaSize;
+    const w = prefs.characterSize; // persisted; anchor the right edge (60px margin)
 
     characterWindow = new BrowserWindow({
-        width: 140,
-        height: 140,
+        width: w,
+        height: w,
         frame: false,
         resizable: false,
         alwaysOnTop: true,
         transparent: true,
         focusable: true,
-        x: size.width - 200,
+        x: size.width - 60 - w,
         y: 50,
         webPreferences: {
             preload: path.join(__dirname, 'preload.js')
@@ -137,17 +244,18 @@ const createCharacterWindow = () => {
 // left of your own character. Created hidden; shown only while paired.
 const createPeerWindow = () => {
     const size = screen.getPrimaryDisplay().workAreaSize;
+    const w = prefs.peerSize; // persisted; sits left of the character with a 20px gap
 
     peerWindow = new BrowserWindow({
-        width: 140,
-        height: 140,
+        width: w,
+        height: w,
         frame: false,
         resizable: false,
         alwaysOnTop: true,
         transparent: true,
         focusable: true,
         show: false,
-        x: size.width - 360,
+        x: size.width - 80 - prefs.characterSize - w,
         y: 50,
         webPreferences: {
             preload: path.join(__dirname, 'preload.js')
@@ -166,6 +274,9 @@ app.whenReady().then(() => {
     // Load (or first-time create) our persistent identity so our code survives
     // restarts. network.start sends it to the server on every connect.
     myIdentity = identity.load();
+    // Persisted widget sizes (must load before the avatar windows are created).
+    prefs = settings.load();
+    debug.log('loaded sizes', JSON.stringify(prefs));
 
     createWindow()
     createCharacterWindow()
@@ -189,10 +300,18 @@ app.whenReady().then(() => {
         characterWindow.webContents.send('global-mousedown', event);
         // event.button is an integer button index — abstract, no coordinates.
         network.sendInput('mouse-down', event.button);
+        // Left-click on an avatar's hitbox starts a manual drag of that widget.
+        if (event.button === LEFT_BUTTON) beginDrag();
     });
     uIOhook.on('mouseup', event => {
         characterWindow.webContents.send('global-mouseup', event);
         network.sendInput('mouse-up', event.button);
+        if (event.button === LEFT_BUTTON) endDrag();
+    });
+    // Scroll while holding an avatar resizes it. Wheel events are NOT relayed to
+    // the peer — the network protocol stays key/mouse up/down only.
+    uIOhook.on('wheel', event => {
+        if (drag) resizeHeldAvatar(event.rotation);
     });
     uIOhook.start();
 
@@ -260,6 +379,7 @@ app.whenReady().then(() => {
     fullscreen.start((isFullscreen) => {
         debug.log('fullscreen transition ->', isFullscreen);
         fullscreenActive = isFullscreen;
+        if (isFullscreen) endDrag(); // never keep dragging/resizing under a game
         avatarWindows().forEach(updateMouseIgnore);
     });
 });
@@ -269,6 +389,7 @@ app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {
         uIOhook.stop();
         fullscreen.stop();
+        endDrag();
         if (alwaysOnTopTimer) clearInterval(alwaysOnTopTimer);
         if (hoverTimer) clearInterval(hoverTimer);
         app.quit();

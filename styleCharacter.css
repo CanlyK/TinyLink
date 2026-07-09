@@ -8,17 +8,7 @@ body {
     height: 100vh;
 }
 
-/* Drag hitbox sized to the VISIBLE sprite (measured opaque bounds of the character
-   across all poses), not the whole transparent window. Only this region is
-   draggable; the transparent padding around it is click-through — main.js polls
-   the cursor and toggles setIgnoreMouseEvents accordingly, and forces
-   click-through during a fullscreen game.
-   NOTE: these insets are duplicated as HITBOX in main.js — keep them in sync. */
-#hitbox {
-    position: fixed;
-    left: 23%;
-    right: 15%;
-    top: 37%;
-    bottom: 20%;
-    -webkit-app-region: drag;
-}
+/* No -webkit-app-region here: dragging (and scroll-to-resize while held) is
+   implemented manually in main.js via uiohook + cursor polling, over the HITBOX
+   region defined there. A native CSS drag would swallow wheel events for the
+   whole hold, making resize-while-dragging impossible. */

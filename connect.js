@@ -14,7 +14,7 @@ window.link.onCode((code) => {
 
 // Human-readable status messages for each state the network layer reports.
 const ERROR_TEXT = {
-  'invalid-code': "That code isn't valid — double-check it with your friend.",
+  'invalid-code': "That code isn't valid. Double-check with your friend.",
   'self-pair': "That's your own code! Enter your friend's.",
   'peer-busy': 'That person is already paired with someone.',
 };
@@ -25,13 +25,13 @@ window.link.onStatus((status, detail) => {
       setStatus('Connecting to server…');
       break;
     case 'online':
-      setStatus('Ready. Share your code or enter a friend\'s.');
+      setStatus('Share your code or enter a friend\'s.');
       break;
     case 'offline':
-      setStatus('Server unreachable — retrying…');
+      setStatus('Server unreachable - retrying…');
       break;
     case 'paired':
-      setStatus(`Paired with ${detail} 🎉`);
+      setStatus(`Paired with ${detail}`);
       break;
     case 'peer-left':
       setStatus('Your friend disconnected.');
